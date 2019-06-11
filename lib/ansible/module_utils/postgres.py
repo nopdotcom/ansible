@@ -40,20 +40,6 @@ from ansible.module_utils.six import iteritems
 from distutils.version import LooseVersion
 
 
-class LibraryError(Exception):
-    pass
-
-
-def ensure_libs(sslrootcert=None):
-    if not HAS_PSYCOPG2:
-        raise LibraryError('psycopg2 is not installed. we need psycopg2.')
-    if sslrootcert and psycopg2.__version__ < '2.4.3':
-        raise LibraryError('psycopg2 must be at least 2.4.3 in order to use the ca_cert parameter')
-
-    # no problems
-    return None
-
-
 def postgres_common_argument_spec():
     """
     Return a dictionary with connection options.
@@ -161,3 +147,35 @@ def connect_to_db(module, autocommit=False, fail_on_conn=True, warn_db_default=T
             db_connection = None
 
     return db_connection
+
+
+def exec_sql(obj, query, ddl=False, add_to_executed=True):
+    """Execute SQL.
+
+    Auxiliary function for PostgreSQL user classes.
+
+    Returns a query result if possible or True/False if ddl=True arg was passed.
+    It necessary for statements that don't return any result (like DDL queries).
+
+    Arguments:
+        obj (obj) -- must be an object of a user class.
+            The object must have module (AnsibleModule class object) and
+            cursor (psycopg cursor object) attributes
+        query (str) -- SQL query to execute
+        ddl (bool) -- must return True or False instead of rows (typical for DDL queries)
+            (default False)
+        add_to_executed (bool) -- append the query to obj.executed_queries attribute
+    """
+    try:
+        obj.cursor.execute(query)
+
+        if add_to_executed:
+            obj.executed_queries.append(query)
+
+        if not ddl:
+            res = obj.cursor.fetchall()
+            return res
+        return True
+    except Exception as e:
+        obj.module.fail_json(msg="Cannot execute SQL '%s': %s" % (query, to_native(e)))
+    return False
