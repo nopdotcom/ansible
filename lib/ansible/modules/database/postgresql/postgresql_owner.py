@@ -20,8 +20,6 @@ short_description: Change an owner of PostgreSQL database object
 description:
 - Change an owner of PostgreSQL database object.
 - Also allows to reassign the ownership of database objects owned by a database role to another role.
-- For more information about REASSIGN OWNED BY command
-  see U(https://www.postgresql.org/docs/current/sql-reassign-owned.html).
 version_added: '2.8'
 
 options:
@@ -48,10 +46,9 @@ options:
     description:
     - The list of role names. The ownership of all the objects within the current database,
       and of all shared objects (databases, tablespaces), owned by this role(s) will be reassigned to I(owner).
-    - Pay attention - it reassignes all objects owned by this role(s) in the I(db)!
+    - Pay attention - it reassigns all objects owned by this role(s) in the I(db)!
     - If role(s) exists, always returns changed True.
     - Cannot reassign ownership of objects that are required by the database system.
-    - For more information see U(https://www.postgresql.org/docs/current/sql-reassign-owned.html).
     - Mutually exclusive with C(obj_type).
     type: list
   fail_on_role:
@@ -74,21 +71,13 @@ options:
     - Permissions checking for SQL commands is carried out as though
       the session_role were the one that had logged in originally.
     type: str
-notes:
-- The default authentication assumes that you are either logging in as or
-  sudo'ing to the postgres account on the host.
-- To avoid "Peer authentication failed for user postgres" error,
-  use postgres user as a I(become_user).
-- This module uses psycopg2, a Python PostgreSQL database adapter. You must
-  ensure that psycopg2 is installed on the host before using this module.
-- If the remote host is the PostgreSQL server (which is the default case), then
-  PostgreSQL must also be installed on the remote host.
-- For Ubuntu-based systems, install the postgresql, libpq-dev, and python-psycopg2 packages
-  on the remote host before using this module.
-
-requirements:
-- psycopg2
-
+seealso:
+- module: postgresql_user
+- module: postgresql_privs
+- module: postgresql_membership
+- name: PostgreSQL REASSIGN OWNED command reference
+  description: Complete reference of the PostgreSQL REASSIGN OWNED command documentation.
+  link: https://www.postgresql.org/docs/current/sql-reassign-owned.html
 author:
 - Andrew Klychkov (@Andersson007)
 extends_documentation_fragment: postgres
@@ -157,13 +146,13 @@ except ImportError:
     pass
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils.database import SQLParseError, pg_quote_identifier
+from ansible.module_utils.database import pg_quote_identifier
 from ansible.module_utils.postgres import (
     connect_to_db,
     exec_sql,
+    get_conn_params,
     postgres_common_argument_spec,
 )
-from ansible.module_utils._text import to_native
 
 
 class PgOwnership(object):
@@ -172,7 +161,7 @@ class PgOwnership(object):
 
     Arguments:
         module (AnsibleModule): Object of Ansible module class.
-        cursor (psycopg2.connect.cursor): Cursor object for interraction with the database.
+        cursor (psycopg2.connect.cursor): Cursor object for interaction with the database.
         role (str): Role name to set as a new owner of objects.
 
     Important:
@@ -225,7 +214,6 @@ class PgOwnership(object):
             fail_on_role (bool): If True, fail when a role from old_owners does not exist.
                 Otherwise just warn and continue.
         """
-
         roles = []
         for r in old_owners:
             if self.check_role_exists(r, fail_on_role):
@@ -251,7 +239,6 @@ class PgOwnership(object):
             obj_type (str): Type of object (like database, table, view, etc.).
             obj_name (str): Object name.
         """
-
         self.obj_name = obj_name
         self.obj_type = obj_type
 
@@ -286,7 +273,6 @@ class PgOwnership(object):
 
     def __is_owner(self):
         """Return True if self.role is the current object owner."""
-
         if self.obj_type == 'table':
             query = ("SELECT 1 FROM pg_tables WHERE tablename = '%s' "
                      "AND tableowner = '%s'" % (self.obj_name, self.role))
@@ -381,7 +367,7 @@ class PgOwnership(object):
         self.changed = exec_sql(self, query, ddl=True)
 
     def __role_exists(self, role):
-        """Return True if role exists, otherwise return Fasle."""
+        """Return True if role exists, otherwise return False."""
         return exec_sql(self, "SELECT 1 FROM pg_roles WHERE rolname = '%s'" % role, add_to_executed=False)
 
 
@@ -419,7 +405,8 @@ def main():
     reassign_owned_by = module.params['reassign_owned_by']
     fail_on_role = module.params['fail_on_role']
 
-    db_connection = connect_to_db(module, autocommit=False)
+    conn_params = get_conn_params(module, module.params)
+    db_connection = connect_to_db(module, conn_params, autocommit=False)
     cursor = db_connection.cursor(cursor_factory=DictCursor)
 
     ##############

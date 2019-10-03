@@ -47,8 +47,9 @@ from ansible.plugins.loader import filter_loader, lookup_loader, test_loader
 from ansible.template.safe_eval import safe_eval
 from ansible.template.template import AnsibleJ2Template
 from ansible.template.vars import AnsibleJ2Vars
+from ansible.utils.collection_loader import AnsibleCollectionRef
 from ansible.utils.display import Display
-from ansible.utils.unsafe_proxy import UnsafeProxy, wrap_var
+from ansible.utils.unsafe_proxy import wrap_var
 
 # HACK: keep Python 2.6 controller tests happy in CI until they're properly split
 try:
@@ -250,7 +251,7 @@ class AnsibleContext(Context):
     A custom context, which intercepts resolve() calls and sets a flag
     internally if any variable lookup returns an AnsibleUnsafe value. This
     flag is checked post-templating, and (when set) will result in the
-    final templated result being wrapped via UnsafeProxy.
+    final templated result being wrapped in AnsibleUnsafe.
     '''
     def __init__(self, *args, **kwargs):
         super(AnsibleContext, self).__init__(*args, **kwargs)
@@ -325,20 +326,21 @@ class JinjaPluginIntercept(MutableMapping):
         if func:
             return func
 
-        components = key.split('.')
+        acr = AnsibleCollectionRef.try_parse_fqcr(key, self._dirname)
 
-        if len(components) != 3:
+        if not acr:
             raise KeyError('invalid plugin name: {0}'.format(key))
-
-        collection_name = '.'.join(components[0:2])
-        collection_pkg = 'ansible_collections.{0}.plugins.{1}'.format(collection_name, self._dirname)
 
         # FIXME: error handling for bogus plugin name, bogus impl, bogus filter/test
 
-        # FIXME: move this capability into the Jinja plugin loader
-        pkg = import_module(collection_pkg)
+        pkg = import_module(acr.n_python_package_name)
 
-        for dummy, module_name, ispkg in pkgutil.iter_modules(pkg.__path__, prefix=collection_name + '.'):
+        parent_prefix = acr.collection
+
+        if acr.subdirs:
+            parent_prefix = '{0}.{1}'.format(parent_prefix, acr.subdirs)
+
+        for dummy, module_name, ispkg in pkgutil.iter_modules(pkg.__path__, prefix=parent_prefix + '.'):
             if ispkg:
                 continue
 
@@ -347,13 +349,11 @@ class JinjaPluginIntercept(MutableMapping):
             method_map = getattr(plugin_impl, self._method_map_name)
 
             for f in iteritems(method_map()):
-                fq_name = '.'.join((collection_name, f[0]))
+                fq_name = '.'.join((parent_prefix, f[0]))
+                # FIXME: detect/warn on intra-collection function name collisions
                 self._collection_jinja_func_cache[fq_name] = f[1]
 
-            function_impl = self._collection_jinja_func_cache[key]
-
-        # FIXME: detect/warn on intra-collection function name collisions
-
+        function_impl = self._collection_jinja_func_cache[key]
         return function_impl
 
     def __setitem__(self, key, value):
@@ -442,7 +442,7 @@ class Templar:
         self._no_type_regex = re.compile(r'.*?\|\s*(?:%s)(?:\([^\|]*\))?\s*\)?\s*(?:%s)' %
                                          ('|'.join(C.STRING_TYPE_FILTERS), self.environment.variable_end_string))
 
-    def _get_filters(self, builtin_filters):
+    def _get_filters(self):
         '''
         Returns filter plugins, after loading and caching them if need be
         '''
@@ -535,7 +535,7 @@ class Templar:
             if isinstance(variable, string_types):
                 result = variable
 
-                if self.is_template(variable):
+                if self.is_possibly_template(variable):
                     # Check to see if the string we are trying to render is just referencing a single
                     # var.  In this case we don't want to accidentally change the type of the variable
                     # to a string by using the jinja template renderer. We just want to pass it.
@@ -631,7 +631,7 @@ class Templar:
                 return variable
 
     def is_template(self, data):
-        ''' lets us know if data has a template'''
+        '''lets us know if data has a template'''
         if isinstance(data, string_types):
             return is_template(data, self.environment)
         elif isinstance(data, (list, tuple)):
@@ -644,7 +644,26 @@ class Templar:
                     return True
         return False
 
-    templatable = _contains_vars = is_template
+    templatable = is_template
+
+    def is_possibly_template(self, data):
+        '''Determines if a string looks like a template, by seeing if it
+        contains a jinja2 start delimiter. Does not guarantee that the string
+        is actually a template.
+
+        This is different than ``is_template`` which is more strict.
+        This method may return ``True`` on a string that is not templatable.
+
+        Useful when guarding passing a string for templating, but when
+        you want to allow the templating engine to make the final
+        assessment which may result in ``TemplateSyntaxError``.
+        '''
+        env = self.environment
+        if isinstance(data, string_types):
+            for marker in (env.block_start_string, env.variable_start_string, env.comment_start_string):
+                if marker in data:
+                    return True
+        return False
 
     def _convert_bare_variable(self, variable):
         '''
@@ -725,7 +744,7 @@ class Templar:
                     ran = wrap_var(ran)
                 else:
                     try:
-                        ran = UnsafeProxy(",".join(ran))
+                        ran = wrap_var(",".join(ran))
                     except TypeError:
                         # Lookup Plugins should always return lists.  Throw an error if that's not
                         # the case:
@@ -775,7 +794,7 @@ class Templar:
                     setattr(myenv, key, ast.literal_eval(val.strip()))
 
             # Adds Ansible custom filters and tests
-            myenv.filters.update(self._get_filters(myenv.filters))
+            myenv.filters.update(self._get_filters())
             myenv.tests.update(self._get_tests())
 
             if escape_backslashes:

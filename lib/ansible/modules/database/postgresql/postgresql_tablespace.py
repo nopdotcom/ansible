@@ -20,9 +20,7 @@ DOCUMENTATION = r'''
 module: postgresql_tablespace
 short_description: Add or remove PostgreSQL tablespaces from remote hosts
 description:
-- Adds or removes PostgreSQL tablespaces from remote hosts
-  U(https://www.postgresql.org/docs/current/sql-createtablespace.html),
-  U(https://www.postgresql.org/docs/current/manage-ag-tablespaces.html).
+- Adds or removes PostgreSQL tablespaces from remote hosts.
 version_added: '2.8'
 options:
   tablespace:
@@ -58,8 +56,7 @@ options:
     description:
     - Dict of tablespace options to set. Supported from PostgreSQL 9.0.
     - For more information see U(https://www.postgresql.org/docs/current/sql-createtablespace.html).
-    - When reset is passed as an option's value, if the option was set previously, it will be removed
-      U(https://www.postgresql.org/docs/current/sql-altertablespace.html).
+    - When reset is passed as an option's value, if the option was set previously, it will be removed.
     type: dict
   rename_to:
     description:
@@ -83,6 +80,20 @@ notes:
 - I(state=absent) and I(state=present) (the second one if the tablespace doesn't exist) do not
   support check mode because the corresponding PostgreSQL DROP and CREATE TABLESPACE commands
   can not be run inside the transaction block.
+
+seealso:
+- name: PostgreSQL tablespaces
+  description: General information about PostgreSQL tablespaces.
+  link: https://www.postgresql.org/docs/current/manage-ag-tablespaces.html
+- name: CREATE TABLESPACE reference
+  description: Complete reference of the CREATE TABLESPACE command documentation.
+  link: https://www.postgresql.org/docs/current/sql-createtablespace.html
+- name: ALTER TABLESPACE reference
+  description: Complete reference of the ALTER TABLESPACE command documentation.
+  link: https://www.postgresql.org/docs/current/sql-altertablespace.html
+- name: DROP TABLESPACE reference
+  description: Complete reference of the DROP TABLESPACE command documentation.
+  link: https://www.postgresql.org/docs/current/sql-droptablespace.html
 
 author:
 - Flavien Chantelot (@Dorn-)
@@ -172,13 +183,13 @@ except ImportError:
     pass
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils.database import SQLParseError, pg_quote_identifier
+from ansible.module_utils.database import pg_quote_identifier
 from ansible.module_utils.postgres import (
     connect_to_db,
     exec_sql,
+    get_conn_params,
     postgres_common_argument_spec,
 )
-from ansible.module_utils._text import to_native
 
 
 class PgTablespace(object):
@@ -218,7 +229,6 @@ class PgTablespace(object):
 
     def get_info(self):
         """Get tablespace information."""
-
         # Check that spcoptions exists:
         opt = exec_sql(self, "SELECT 1 FROM information_schema.columns "
                              "WHERE table_name = 'pg_tablespace' "
@@ -275,7 +285,6 @@ class PgTablespace(object):
         args:
             location (str) -- tablespace directory path in the FS
         """
-
         query = ("CREATE TABLESPACE %s LOCATION '%s'" % (pg_quote_identifier(self.name, 'database'), location))
         return exec_sql(self, query, ddl=True)
 
@@ -284,7 +293,6 @@ class PgTablespace(object):
 
         Return True if success, otherwise, return False.
         """
-
         return exec_sql(self, "DROP TABLESPACE %s" % pg_quote_identifier(self.name, 'database'), ddl=True)
 
     def set_owner(self, new_owner):
@@ -295,7 +303,6 @@ class PgTablespace(object):
         args:
             new_owner (str) -- name of a new owner for the tablespace"
         """
-
         if new_owner == self.owner:
             return False
 
@@ -310,7 +317,6 @@ class PgTablespace(object):
         args:
             newname (str) -- new name for the tablespace"
         """
-
         query = "ALTER TABLESPACE %s RENAME TO %s" % (pg_quote_identifier(self.name, 'database'), newname)
         self.new_name = newname
         return exec_sql(self, query, ddl=True)
@@ -324,7 +330,6 @@ class PgTablespace(object):
         args:
             new_settings (list) -- list of new settings
         """
-
         # settings must be a dict {'key': 'value'}
         if self.opt_not_supported:
             return False
@@ -351,7 +356,6 @@ class PgTablespace(object):
         args:
             setting (str) -- string in format "setting_name = 'setting_value'"
         """
-
         query = "ALTER TABLESPACE %s RESET (%s)" % (pg_quote_identifier(self.name, 'database'), setting)
         return exec_sql(self, query, ddl=True)
 
@@ -363,7 +367,6 @@ class PgTablespace(object):
         args:
             setting (str) -- string in format "setting_name = 'setting_value'"
         """
-
         query = "ALTER TABLESPACE %s SET (%s)" % (pg_quote_identifier(self.name, 'database'), setting)
         return exec_sql(self, query, ddl=True)
 
@@ -403,7 +406,8 @@ def main():
         module.fail_json(msg="state=absent is mutually exclusive location, "
                              "owner, rename_to, and set")
 
-    db_connection = connect_to_db(module, autocommit=True)
+    conn_params = get_conn_params(module, module.params, warn_db_default=False)
+    db_connection = connect_to_db(module, conn_params, autocommit=True)
     cursor = db_connection.cursor(cursor_factory=DictCursor)
 
     # Change autocommit to False if check_mode:
