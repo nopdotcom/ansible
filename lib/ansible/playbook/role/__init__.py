@@ -292,6 +292,15 @@ class Role(Base, Conditional, Taggable, CollectionSearch):
                 return data
             elif main is not None:
                 raise AnsibleParserError("Could not find specified file in role: %s/%s" % (subdir, main))
+        # *ONLY* if the subdir does not exist, try falling back to subdir.yml.
+        if main is None or main == 'main':
+            # This strips any trailing slashes.
+            norm_subdir = os.path.normpath(file_path)
+            for ext in ['.yml', '.yaml', '.json']:
+                fn = norm_subdir + ext
+                if self._loader.path_exists(fn):
+                    data = self._loader.load_from_file(fn)
+                    return data
         return None
 
     def _load_dependencies(self):
